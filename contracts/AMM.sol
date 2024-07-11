@@ -12,15 +12,7 @@ interface IERC20 {
 }
 
 contract AMM is VRFConsumerBaseV2Plus,AccessControl {
-    bytes32 public constant INIT_ROLE = keccak256("INIT_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
-
-
-    struct sellOrder {
-        address user;
-        uint256 targetTokenAmount;
-        uint8 sellType;
-    }
 
     uint256 private  constant ROLL_IN_PROGRESS = 42;
 
@@ -52,9 +44,18 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
     // Cannot exceed VRFCoordinatorV2_5.MAX_NUM_WORDS.
     uint32 public numWords = 1;
 
+
+    struct Order {
+        address user;
+        uint256 targetTokenAmount;
+        uint256 basicTokenAmount;
+        uint8 swapType;
+    }
+
     // map requestID to sell order
-    mapping(uint256 => sellOrder) private pendingOrder;
+    mapping(uint256 => Order) private pendingOrder;
     mapping(uint256 => uint256) public randoms;
+    mapping(uint256 => uint256) public settleResult;
 
     address public basicToken;
     address public targetToken;
@@ -64,33 +65,29 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
     uint256 private k;
 
     uint256 public win_optional_sell_probability;
-    uint256 public reward_win_optional_sell;
-    uint256 public lose_optional_sell_swap_rate;
+    uint256 public optional_sell_down_bound;
+    uint256 public optional_sell_up_bound;
     
     //5%
     uint256 public market_sell_rate;
 
 
-    event GetRandoms(uint256 indexed requestId, uint256 indexed randomnessm, address user, uint256 sellAmount, uint8 sellType);
-    event SellSuceesfully(address indexed user, uint256 sellTargetTokenAmount, uint8 sellType, uint256 preGetTargetTokenAmount,uint256 finalTargetTokenAmount);
+    event GetRandoms(uint256 indexed requestId, uint256 indexed randomness, address user,uint8 sellType);
+    event SwapSuceesfully(address indexed user, uint256 InTokenAmount, uint8 swapType, uint256 preOutTokenAmount,uint256 finalOutTokenAmount);
   
-    constructor(uint256 subscriptionId,address icoContract, address _operator, uint256 _win_optional_sell_probability, uint256 _reward_win_optional_sell ,uint256 _lose_optional_sell_swap_rate,uint256 _market_sell_rate) VRFConsumerBaseV2Plus(vrfCoordinator) {
+    constructor(uint256 subscriptionId, address _operator, uint256 _win_optional_sell_probability, uint256 _optional_sell_down_bound ,uint256 _optional_sell_up_bound,uint256 _market_sell_rate,address _targetToken, address _basicToken) VRFConsumerBaseV2Plus(vrfCoordinator) {
         s_subscriptionId = subscriptionId;
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(INIT_ROLE,msg.sender);
-        _grantRole(INIT_ROLE, icoContract);
         _grantRole(OPERATOR_ROLE, _operator);
         win_optional_sell_probability = _win_optional_sell_probability;
-        reward_win_optional_sell = _reward_win_optional_sell;
-        lose_optional_sell_swap_rate = _lose_optional_sell_swap_rate;
+        optional_sell_down_bound = _optional_sell_down_bound;
+        optional_sell_up_bound = _optional_sell_up_bound;
         market_sell_rate = _market_sell_rate;
-    }
 
-    function Init(address _targetToken, address _basicToken) public onlyRole(INIT_ROLE)  {
         basicToken = _basicToken;
         targetToken = _targetToken;
         balanceK();   
     }
+
 
     function balanceK() internal {
         basicTokenReserve = uint112(IERC20(basicToken).balanceOf(address(this)));
@@ -98,61 +95,62 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
         k = uint256(basicTokenReserve) * uint256(targetTokenReserve);
     }
 
-    function UpdateConf(uint256 _win_optional_sell_probability, uint256 _reward_win_optional_sell ,uint256 _lose_optional_sell_swap_rate,uint256 _market_sell_rate) public onlyRole(DEFAULT_ADMIN_ROLE) {
-        win_optional_sell_probability = _win_optional_sell_probability;
-        reward_win_optional_sell = _reward_win_optional_sell;
-        lose_optional_sell_swap_rate = _lose_optional_sell_swap_rate;
+    function UpdateConf(uint256 _win_optional_sell_probability, uint256 _optional_sell_down_bound ,uint256 _optional_sell_up_bound,uint256 _market_sell_rate) public onlyRole(DEFAULT_ADMIN_ROLE) {
+         win_optional_sell_probability = _win_optional_sell_probability;
+        optional_sell_down_bound = _optional_sell_down_bound;
+        optional_sell_up_bound = _optional_sell_up_bound;
         market_sell_rate = _market_sell_rate;
     }
 
-    function SellResultOfTargetAmount(
-        uint256 _targetTokenAmount,
-        uint8 _sellType
-    ) 
-        public 
-        view 
-        returns (uint256, uint256, uint256)
-    {
-        uint pre_out_basic_token = k / _targetTokenAmount;
+    function SwapResultOfTargetAmount(uint256 _targetTokenAmount,uint256 _basicTokenAmount,uint8 _sellType) public view returns (uint256, uint256, uint256){
+        require(_targetTokenAmount == 0 || _basicTokenAmount == 0);
+        uint256 preOutToken;
+        if (_targetTokenAmount != 0) {
+            preOutToken = basicTokenReserve - k / (_targetTokenAmount + targetTokenReserve);
+        } else if (_basicTokenAmount != 0){
+            preOutToken =  targetTokenReserve - k / (basicTokenReserve + _basicTokenAmount);
+        }
         if (_sellType == 0) {
-            return  (pre_out_basic_token * (10000 - market_sell_rate) /10000 , pre_out_basic_token , pre_out_basic_token * (10000 +  market_sell_rate) /10000);
+            return  (preOutToken * (10000 - market_sell_rate) /10000 , preOutToken , preOutToken * (10000 +  market_sell_rate) /10000);
         } else {
-            return  (pre_out_basic_token * lose_optional_sell_swap_rate  / 10000, pre_out_basic_token, pre_out_basic_token * (10000+ reward_win_optional_sell) / 10000);
+            return  (preOutToken * optional_sell_down_bound  / 10000, preOutToken, preOutToken *  optional_sell_up_bound/ 10000);
         }
     }
 
 
-    function Settle(
-        uint256 requestId, 
-        uint256 persentage,
-        bool win
-    ) 
-        public onlyRole(OPERATOR_ROLE) 
-    {   
-        sellOrder memory order = pendingOrder[requestId];
+    function Settle(uint256 requestId, uint256 persentage) public onlyRole(OPERATOR_ROLE) {   
+        Order memory order = pendingOrder[requestId];
         require(order.targetTokenAmount != 0,"Invalid request id");
-        uint pre_out_basic_token = k / order.targetTokenAmount;
-		uint real_out_basic_token;
-		if (order.sellType == 0) {
-            if (win) {
-                real_out_basic_token = pre_out_basic_token * (10000+ reward_win_optional_sell) / 10000;
-            } else {
-                real_out_basic_token = pre_out_basic_token * lose_optional_sell_swap_rate  / 10000;
-            }
-        } else {
-            real_out_basic_token = pre_out_basic_token * persentage  / 10000;
+
+        uint256 preOutToken;
+        uint256 inToken;
+        if (order.targetTokenAmount != 0) { 
+            preOutToken = basicTokenReserve - k / (order.targetTokenAmount + targetTokenReserve);
+            inToken = order.targetTokenAmount;
+            IERC20(basicToken).transfer(order.user,preOutToken * persentage / 10000);
+        } else if (order.basicTokenAmount != 0){
+            preOutToken =  targetTokenReserve - k / (basicTokenReserve + order.basicTokenAmount);
+            inToken = order.basicTokenAmount;
+            IERC20(targetToken).transfer(order.user,preOutToken * persentage / 10000);
         }
-        IERC20(basicToken).transfer(order.user,real_out_basic_token);
-        emit SellSuceesfully(order.user, order.targetTokenAmount,  order.sellType, pre_out_basic_token,real_out_basic_token);
+        emit SwapSuceesfully(order.user, inToken,  order.swapType, preOutToken,preOutToken * persentage / 1000);
         balanceK();
+        settleResult[requestId] = persentage;
     }
     
-    function Sell(
+    function Swap(
         uint256 _targetTokenAmount,
-        uint8 _sellType 
+        uint256 _basicTokenAmount,
+        uint8 _swapType
     ) public onlyOwner returns (uint256 requestId) {
-        IERC20(targetToken).transferFrom(msg.sender, address(this), _targetTokenAmount);
-        require(_sellType == 0 || _sellType == 1, "Invalid Sell Type");
+        require(_targetTokenAmount == 0 || _basicTokenAmount == 0, "Can not swap 2 token at the same time");
+        require(_swapType == 0 || _swapType == 1, "Invalid Sell Type");
+
+        if (_targetTokenAmount != 0) {
+            IERC20(targetToken).transferFrom(msg.sender, address(this), _targetTokenAmount);
+        } else if (_basicTokenAmount != 0){
+            IERC20(basicToken).transferFrom(msg.sender, address(this), _basicTokenAmount);
+        }
         requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: s_keyHash,
@@ -168,10 +166,11 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
         );
 
         require(pendingOrder[requestId].user == address(0), "Already Query Random");
-        pendingOrder[requestId] = sellOrder({
+        pendingOrder[requestId] = Order({
             user: msg.sender,
             targetTokenAmount: _targetTokenAmount,
-            sellType: _sellType
+            basicTokenAmount: _basicTokenAmount,
+            swapType: _swapType
         });
     }
 
@@ -181,7 +180,7 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
         uint256[] calldata randomWords
     ) internal override {
        randoms[requestId] = randomWords[0];
-       sellOrder memory order = pendingOrder[requestId];
-       emit  GetRandoms(requestId, randomWords[0], order.user,  order.targetTokenAmount, order.sellType);
+       Order memory order = pendingOrder[requestId];
+       emit  GetRandoms(requestId, randomWords[0], order.user,order.swapType);
     }    
 }
