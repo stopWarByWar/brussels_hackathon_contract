@@ -62,30 +62,34 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
 
     uint112 public basicTokenReserve;
     uint112 public targetTokenReserve;
-    uint256 private k;
+    uint256 public k;
 
-    uint256 public win_optional_sell_probability;
-    uint256 public optional_sell_down_bound;
-    uint256 public optional_sell_up_bound;
+    uint256 public win_optional_probability;
+    uint256 public optional_down_bound;
+    uint256 public optional_up_bound;
     
     //5%
-    uint256 public market_sell_rate;
+    uint256 public market_swap_rate;
 
 
-    event GetRandoms(uint256 indexed requestId, uint256 indexed randomness, address user,uint8 sellType);
-    event SwapSuceesfully(address indexed user, uint256 InTokenAmount, uint8 swapType, uint256 preOutTokenAmount,uint256 finalOutTokenAmount);
+    event GetRandoms(uint256 indexed requestId, uint256 indexed randomness, address user,uint8 sellType,uint256 basicToken, uint256 targetToken);
+    event SwapSuceesfully(uint256 indexed requestId, address indexed user, uint256 InTokenAmount, uint8 swapType, uint256 preOutTokenAmount,uint256 finalOutTokenAmount);
   
-    constructor(uint256 subscriptionId, address _operator, uint256 _win_optional_sell_probability, uint256 _optional_sell_down_bound ,uint256 _optional_sell_up_bound,uint256 _market_sell_rate,address _targetToken, address _basicToken) VRFConsumerBaseV2Plus(vrfCoordinator) {
+    constructor(uint256 subscriptionId, address _operator, uint256 _win_optional_probability, uint256 _optional_down_bound ,uint256 _optional_up_bound,uint256 _market_swap_rate,address _targetToken, address _basicToken) VRFConsumerBaseV2Plus(vrfCoordinator) {
         s_subscriptionId = subscriptionId;
         _grantRole(OPERATOR_ROLE, _operator);
-        win_optional_sell_probability = _win_optional_sell_probability;
-        optional_sell_down_bound = _optional_sell_down_bound;
-        optional_sell_up_bound = _optional_sell_up_bound;
-        market_sell_rate = _market_sell_rate;
+        win_optional_probability = _win_optional_probability;
+        optional_down_bound = _optional_down_bound;
+        optional_up_bound = _optional_up_bound;
+        market_swap_rate = _market_swap_rate;
 
         basicToken = _basicToken;
         targetToken = _targetToken;
         balanceK();   
+    }
+
+    function BalanceK() public {
+        balanceK();
     }
 
 
@@ -95,25 +99,25 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
         k = uint256(basicTokenReserve) * uint256(targetTokenReserve);
     }
 
-    function UpdateConf(uint256 _win_optional_sell_probability, uint256 _optional_sell_down_bound ,uint256 _optional_sell_up_bound,uint256 _market_sell_rate) public onlyRole(DEFAULT_ADMIN_ROLE) {
-         win_optional_sell_probability = _win_optional_sell_probability;
-        optional_sell_down_bound = _optional_sell_down_bound;
-        optional_sell_up_bound = _optional_sell_up_bound;
-        market_sell_rate = _market_sell_rate;
+    function UpdateConf(uint256 _win_optional_probability, uint256 _optional_down_bound ,uint256 _optional_up_bound,uint256 _market_swap_rate) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        win_optional_probability = _win_optional_probability;
+        optional_down_bound = _optional_down_bound;
+        optional_up_bound = _optional_up_bound;
+        market_swap_rate = _market_swap_rate;
     }
 
     function SwapResultOfTargetAmount(uint256 _targetTokenAmount,uint256 _basicTokenAmount,uint8 _sellType) public view returns (uint256, uint256, uint256){
-        require(_targetTokenAmount == 0 || _basicTokenAmount == 0);
+        require(_targetTokenAmount == 0 || _basicTokenAmount == 0, "One of input should be 0");
         uint256 preOutToken;
         if (_targetTokenAmount != 0) {
             preOutToken = basicTokenReserve - k / (_targetTokenAmount + targetTokenReserve);
         } else if (_basicTokenAmount != 0){
             preOutToken =  targetTokenReserve - k / (basicTokenReserve + _basicTokenAmount);
         }
-        if (_sellType == 0) {
-            return  (preOutToken * (10000 - market_sell_rate) /10000 , preOutToken , preOutToken * (10000 +  market_sell_rate) /10000);
+        if (_sellType == 1) {
+            return  (preOutToken * (10000 - market_swap_rate) /10000 , preOutToken , preOutToken * (10000 +  market_swap_rate) /10000);
         } else {
-            return  (preOutToken * optional_sell_down_bound  / 10000, preOutToken, preOutToken *  optional_sell_up_bound/ 10000);
+            return  (preOutToken * optional_down_bound  / 10000, preOutToken, preOutToken *  optional_up_bound/ 10000);
         }
     }
 
@@ -121,6 +125,7 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
     function Settle(uint256 requestId, uint256 persentage) public onlyRole(OPERATOR_ROLE) {   
         Order memory order = pendingOrder[requestId];
         require(order.targetTokenAmount != 0,"Invalid request id");
+        require( settleResult[requestId] == 0, "The order has been settled");
 
         uint256 preOutToken;
         uint256 inToken;
@@ -133,7 +138,7 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
             inToken = order.basicTokenAmount;
             IERC20(targetToken).transfer(order.user,preOutToken * persentage / 10000);
         }
-        emit SwapSuceesfully(order.user, inToken,  order.swapType, preOutToken,preOutToken * persentage / 1000);
+        emit SwapSuceesfully(requestId,order.user, inToken,  order.swapType, preOutToken,preOutToken * persentage / 10000);
         balanceK();
         settleResult[requestId] = persentage;
     }
@@ -181,6 +186,10 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
     ) internal override {
        randoms[requestId] = randomWords[0];
        Order memory order = pendingOrder[requestId];
-       emit  GetRandoms(requestId, randomWords[0], order.user,order.swapType);
+       emit  GetRandoms(requestId, randomWords[0], order.user,order.swapType,order.basicTokenAmount,order.targetTokenAmount);
     }    
+
+    function getConfInfo() view public returns (uint256, uint256, uint256, uint256) {
+        return(win_optional_probability,optional_down_bound,optional_up_bound,market_swap_rate);
+    }
 }

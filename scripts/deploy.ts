@@ -5,7 +5,9 @@ import {AMM__factory} from "../typechain-types/factories/contracts/AMM.sol/AMM__
 import {BigNumberish } from "ethers";
 
 
-async function deploy() : Promise<[string,string,string]> {
+
+
+async function deploy(_win_optional_sell_probability: BigNumberish,_optional_down_bound:BigNumberish,_optional_up_bound:BigNumberish,_market_swap_rate: BigNumberish) : Promise<[string,string,string]> {
   const [deployer] = await ethers.getSigners();
   console.log('Deploying contract with account:',deployer.address);
 
@@ -33,10 +35,6 @@ async function deploy() : Promise<[string,string,string]> {
 
 
   const subscriptionId = "111199725596137296145697140297308239442849385428777531318641813055372418231896";
-  const _win_optional_sell_probability = 1;
-  const _optional_sell_down_bound = 10000;
-  const _optional_sell_up_bound = 9500;
-  const _market_sell_rate = 1000;
 
 
   const AMM = await ethers.getContractFactory("AMM",deployer);
@@ -44,19 +42,19 @@ async function deploy() : Promise<[string,string,string]> {
         subscriptionId,
         deployer.address,
         _win_optional_sell_probability,
-        _optional_sell_down_bound,
-        _optional_sell_up_bound,
-        _market_sell_rate,
+        _optional_down_bound,
+        _optional_up_bound,
+        _market_swap_rate,
         addr2,
         addr1
   );    
   const addr = amm.getAddress();
   await amm.waitForDeployment();
   console.log('amm contract address:', addr )
+  
 
   const res  = await Promise.all([addr,addr1,addr2])
   return res
- 
  
 };
 
@@ -74,20 +72,37 @@ async function interact(ammAddr:string,basicTokenAddr:string,targetTokenAddr:str
   console.log(`mint target token to amm contract in tx: ${mintT2AMMResp.hash}`);
 
 
-  const mintT2UResp = await targetToken.mint(signer.address,targetTokenMint2User)
-  await mintT2UResp.wait();
-  console.log(`mint target token to user in tx: ${mintT2UResp.hash}`);
+  // const mintT2UResp = await targetToken.mint(signer.address,targetTokenMint2User)
+  // await mintT2UResp.wait();
+  // console.log(`mint target token to user in tx: ${mintT2UResp.hash}`);
 
 
-  const approveResp = await targetToken.approve(ammAddr, 1_000_000_000_000000000n)
-  await approveResp.wait();
-  console.log(`approve target token of user to amm contract in tx: ${approveResp.hash}`);
+  const approveBResp = await basicToken.approve(ammAddr, targetTokenMint2User)
+  await approveBResp.wait();
+  console.log(`approve target token of user to amm contract in tx: ${approveBResp.hash}`);
+
+  const approveTResp = await targetToken.approve(ammAddr, targetTokenMint2User)
+  await approveTResp.wait();
+  console.log(`approve target token of user to amm contract in tx: ${approveTResp.hash}`);
+
+  const amm = AMM__factory.connect(ammAddr,signer);
+  const initResp = await amm.BalanceK();
+  console.log(`init amm in tx: ${initResp.hash}`);
 
 }
 
 async function main() {
-  const [ammAddr,basicTokenAddr,targetTokenAddr] = await deploy();
-  await interact(ammAddr,basicTokenAddr,targetTokenAddr,80_000000000,1_000_000_000_000000000n,100_000_000000000n);
+  const _win_optional_sell_probability = 5000;
+  const _optional_down_bound = 8500;
+  const optional_up_bound = 10500;
+  const _market_swap_rate = 1000;
+
+
+  const [ammAddr,basicTokenAddr,targetTokenAddr] = await deploy(_win_optional_sell_probability,_optional_down_bound,optional_up_bound,_market_swap_rate);
+  const ammBasicTokenInitAmount = 100000_000000000000000000n;
+  const targetTokenInitAmount = 100000_000000000000000000n;
+  const targetTokenMint2User= 100000_000000000000000000n
+  await interact(ammAddr,basicTokenAddr,targetTokenAddr,ammBasicTokenInitAmount,targetTokenInitAmount,targetTokenMint2User);
 }
   
   // We recommend this pattern to be able to use async/await everywhere

@@ -1,7 +1,9 @@
 import { ethers } from "hardhat";
 import { AMM__factory } from "../typechain-types/factories/contracts/AMM.sol/AMM__factory";
+import {BigNumberish } from "ethers";
 
-// async function init() {
+
+// async function approve(basicTokenAmount, targetTokenAmount) {
 //   const [signer] = await ethers.getSigners();
 //   console.log('Init with account:',signer.address);
 
@@ -19,26 +21,27 @@ import { AMM__factory } from "../typechain-types/factories/contracts/AMM.sol/AMM
 //   console.log(`init amm contract in tx: ${initResp.hash}`);
 // }
 
-async function Sell() {
+async function Swap(targetToken:BigNumberish,basicToken:BigNumberish,SwapSType:BigNumberish)
+{
   const [signer] = await ethers.getSigners();
-  console.log('Sell with account:',signer.address);
+  console.log('Swap with account:',signer.address);
 
-  const amm_addr = "0x65c0C15c466BBbc0d8193CAb206f7699dA4a451E"
+  const amm_addr = "0x72600cB76bB67b6Ae4264C5d10ceE73966E82fB6"
   const amm = AMM__factory.connect(amm_addr,signer);
   const sellResp = await amm.Swap(
-    1_000_000_000_000000000n,
-    0,
-    0
+    targetToken,
+    basicToken,
+    SwapSType
   );
   await sellResp.wait();
-  console.log(`sell amm contract in tx: ${sellResp.hash}`);
+  console.log(`Swap amm contract in tx: ${sellResp.hash}`);
 }
 
 async function Settle() {
   const [signer] = await ethers.getSigners();
   console.log('Settle with account:',signer.address);
 
-  const amm_addr = "0x65c0C15c466BBbc0d8193CAb206f7699dA4a451E"
+  const amm_addr = "0x72600cB76bB67b6Ae4264C5d10ceE73966E82fB6"
   const amm = AMM__factory.connect(amm_addr,signer);
   const sellResp = await amm.Settle(
     110362072673275486240168669071546578611991718927397692217477536313108042034371n,
@@ -48,14 +51,31 @@ async function Settle() {
   console.log(`settle amm contract in tx: ${sellResp.hash}`);
 }
 
+async function getSwapAmount() {
+  const [signer] = await ethers.getSigners();
+  console.log('Swap with account:',signer.address);
 
-async function main() {
-  // await init()
-  // await Sell()
-  await Settle()
+  const amm_addr = "0x72600cB76bB67b6Ae4264C5d10ceE73966E82fB6"
+  const amm = AMM__factory.connect(amm_addr,signer);
+
+  const k = await amm.k()
+  console.log("current k is:",k)
+
+  const resp = await amm.SwapResultOfTargetAmount(
+    0,
+    1_000_000_000_000_000_000n,
+    0
+  )
+
+  console.log(resp[0]/1_000_000_000_000n, resp[1]/1_000_000_000_000n,resp[2]/1_000_000_000_000n)
 }
 
 
+async function main() {
+  // await getSwapAmount()
+  await Swap(1_000_000_000_000_000_000n,0,0);
+  // await Settle()
+}
 
   
   // We recommend this pattern to be able to use async/await everywhere
