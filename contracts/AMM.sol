@@ -147,7 +147,7 @@ contract AMM is VRFConsumerBaseV2Plus,AccessControl {
         uint256 _targetTokenAmount,
         uint256 _basicTokenAmount,
         uint8 _swapType
-    ) public onlyOwner returns (uint256 requestId) {
+    ) public returns (uint256 requestId) {
         require(_targetTokenAmount == 0 || _basicTokenAmount == 0, "Can not swap 2 token at the same time");
         require(_swapType == 0 || _swapType == 1, "Invalid Sell Type");
 
